@@ -2,14 +2,26 @@ module Language.CP.Syntax.RcdIR where
 
 import Prelude
 
-import Data.List (List, intercalate)
+import Data.List (List(..), intercalate, (:))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Tuple.Nested (type (/\), (/\))
-import Language.CP.Syntax.Common (BinOp, Name, UnOp, brackets, parens)
+import Language.CP.Syntax.Common (BinOp, Name, UnOp, Label, brackets, parens)
+import Language.CP.Syntax.Core (Ty)
 import Language.CP.Util ((<+>))
+import Partial.Unsafe (unsafeCrashWith)
+
+-- Record Fields --
+
+data Fld a = Fld Label a
+
+instance Show a => Show (Fld a) where
+  show (Fld l ty) = l <> ": " <> show ty
+
+derive instance Eq a => Eq (Fld a)
 
 -- Types --
 
-data Ty = TyInt
+{- data Ty = TyInt
         | TyDouble
         | TyString
         | TyBool
@@ -23,7 +35,7 @@ data Ty = TyInt
         | TyForall Name Ty Ty
         | TyRef Ty
         | TyArray Ty
-        -- TODO: extensible record types
+        | TyRcd (List (Fld Ty))
 
 instance Show Ty where
   show TyInt    = "Int"
@@ -41,8 +53,9 @@ instance Show Ty where
     "forall" <+> a <+> "*" <+> show td <> "." <+> show t
   show (TyRef t) = parens $ "Ref" <+> show t
   show (TyArray t) = brackets $ show t
+  show (TyRcd flds) = "{" <> intercalate "," (map show flds) <> "}"
 
-derive instance Eq Ty
+derive instance Eq Ty -}
 
 -- Terms --
 
@@ -69,6 +82,9 @@ data Tm = TmInt Int
         | TmToString Tm
         | TmArray Ty (Array Tm)
         -- TODO: record literals, projection, concatenation
+        | TmRcd (List (Fld Tm))
+        | TmRcdProj Tm Label
+        | TmRcdCons Tm Tm
         | TmDef Name Tm Tm
         | TmMain Tm
 
@@ -99,5 +115,8 @@ instance Show Tm where
   show (TmAssign e1 e2) = parens $ show e1 <+> ":=" <+> show e2
   show (TmToString e) = parens $ "toString" <+> show e
   show (TmArray _t arr) = brackets $ intercalate "; " (show <$> arr)
+  show (TmRcd flds) = "{" <> intercalate "," (map show flds) <> "}"
+  show (TmRcdProj r l) = show r <> "." <> l
+  show (TmRcdCons l r) = show l <> "++" <> show r
   show (TmDef x e1 e2) = x <+> "=" <+> show e1 <> ";\n" <> show e2
   show (TmMain e) = show e

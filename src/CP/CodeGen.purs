@@ -5,10 +5,13 @@ import Prelude
 import Control.Monad.Except (Except, runExcept)
 import Control.Monad.State (StateT, evalStateT, modify)
 import Data.Either (Either)
+import Data.Int (toNumber)
+import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), Replacement(..), replaceAll)
+import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Syntax.Common (Name)
-import Language.CP.Syntax.RcdIR (Tm)
+import Language.CP.Syntax.RcdIR (Tm(..))
 import Language.CP.Util ((<+>))
 import Language.JS.AST (JS(..))
 import Partial.Unsafe (unsafeCrashWith)
@@ -46,7 +49,8 @@ data Destination = DstNil | DstOpt Name | DstVar Name
 
 codegen :: Tm -> Destination -> CodeGen (AST /\ Name)
 -- TODO: compile RcdIRs to JavaScript; no need for types hopefully
-codegen e = unsafeCrashWith $ "CP.CodeGen.codegen:" <+> show e
+-- codegen (TmInt i) dst =
+codegen e _ = unsafeCrashWith $ "CP.CodeGen.codegen:" <+> show e
 
 freshVarName :: CodeGen Name
 freshVarName = do

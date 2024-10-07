@@ -18,9 +18,10 @@ import Data.Tuple (fst, snd)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
 import Effect.Exception (throw)
-import Language.CP.CodeGen (fromState, runCodeGen)
+import Language.CP.CodeGen (runCodeGen)
 import Language.CP.Context (Checking, Mode(..), REPLState, TmBindings, Typing, emptyCtx, initState, runChecking, runTyping, throwCheckError, throwTypeError)
 import Language.CP.Desugar (desugar, desugarProg)
+import Language.CP.Lower (fromState, runLowering)
 import Language.CP.Parser (SParser, expr, lowerIdentifier, program, symbol, ty, upperIdentifier, whiteSpace)
 import Language.CP.Semantics.HOAS as HOAS
 import Language.CP.Semantics.NaturalClosure as Closure
@@ -110,7 +111,8 @@ compile code f st = case runParser code (whiteSpace *> program <* eof) of
   Right prog -> case runChecking (elaborateProg (desugarProg prog)) st of
     Left err -> left $ show err
     Right (e /\ st') -> do
-      js <- runCodeGen e (fromState st)
+      lw /\ _ <- runLowering e (fromState st)
+      js <- runCodeGen lw
       let st'' = initState { tmBindings = takeWhile (\(x /\ _) -> x /= tmHead) st'.tmBindings
                            , tyAliases = takeWhile (\(x /\ _) -> x /= tyHead) st'.tyAliases
                            }
