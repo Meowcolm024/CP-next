@@ -47,8 +47,11 @@ emptyCtx = { tmBindEnv: empty
            , inTrait: false
            }
 
+-- TODO
 fromState :: REPLState -> Ctx
-fromState st = emptyCtx { tmBindEnv = fromFoldable $ rmap fst <$> st.tmBindings }
+fromState st = unsafeCrashWith "TODO"
+-- emptyCtx { tmBindEnv = fromFoldable $ rmap fst <$> st.tmBindings }
+
 
 runCodeGen :: C.Tm -> Ctx -> Either String (Array JS)
 runCodeGen e ctx = do

@@ -107,6 +107,8 @@ type CPHeader = String
 compile :: String -> FilePath -> REPLState -> Either String (JSProgram /\ CPHeader)
 compile code f st = case runParser code (whiteSpace *> program <* eof) of
   Left err -> left $ showParseError err code
+  _ -> left "TODO"
+{-
   Right prog -> case runChecking (elaborateProg (desugarProg prog)) st of
     Left err -> left $ show err
     Right (e /\ st') -> do
@@ -115,7 +117,9 @@ compile code f st = case runParser code (whiteSpace *> program <* eof) of
                            , tyAliases = takeWhile (\(x /\ _) -> x /= tyHead) st'.tyAliases
                            }
       pure $ (prelude "CP" code <> print js) /\ (prelude "H" code <> serialize st'')
+-}
   where
+{-
     tmHead = fromMaybe "" $ fst <$> head st.tmBindings
     tyHead = fromMaybe "" $ fst <$> head st.tyAliases
     prelude c s = case match (preludeRegex c) s of
@@ -130,6 +134,7 @@ compile code f st = case runParser code (whiteSpace *> program <* eof) of
                  else let hd = fst <<< unsafeFromJust $ head st.tmBindings in
                       takeWhile (\(x /\ _ /\ _) -> x /= hd) b
       pure $ wrapUp e diff
+-}
     left err = Left $ f <> ": " <> err
 
 serialize :: REPLState -> CPHeader
@@ -158,13 +163,13 @@ deserialize s = do
                     symbol ":"
                     t <- ty
                     symbol ";"
-                    t' <- case runTyping (translate t) emptyCtx of
+                    t' <- case runTyping (pure t) emptyCtx of
                             Left err -> fail $ show err
                             Right t' -> pure t'
                     pure $ TmBinding x t'
-    discriminate :: List Entry -> List (Name /\ S.Ty) /\ List (Name /\ C.Ty /\ (C.Tm -> C.Tm))
+    discriminate :: List Entry -> List (Name /\ S.Ty) /\ List (Name /\ S.Ty /\ (C.Tm -> C.Tm))
     discriminate Nil = Nil /\ Nil
     discriminate (TyAlias x t : entries) = lmap ((x /\ t) : _) (discriminate entries)
     discriminate (TmBinding x t : entries) = rmap ((x /\ t /\ identity) : _) (discriminate entries)
 
-data Entry = TyAlias Name S.Ty | TmBinding Name C.Ty
+data Entry = TyAlias Name S.Ty | TmBinding Name S.Ty

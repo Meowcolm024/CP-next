@@ -8,7 +8,7 @@ import Control.Monad.State (gets, modify_)
 import Data.Array (all, elem, head, notElem, null, unzip)
 import Data.Either (Either(..))
 import Data.Foldable (foldl, foldr, lookup, traverse_)
-import Data.List (List(..), filter, last, singleton, sort, (:))
+import Data.List (List(..), filter, last, singleton, sort, (:), length)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Set as Set
 import Data.Traversable (for, traverse)
@@ -53,38 +53,49 @@ infer (S.TmUnary Neg e) = do
   if tSubInt then pure $ core C.TyInt S.TyInt
   else if tSubDouble then pure $ core C.TyDouble S.TyDouble
   else throwTypeError $ "Neg is not defined for" <+> show t
-{- TODO: modify the following code similarly
 infer (S.TmUnary Len e) = do
   e' /\ t <- infer e
-  let core = C.TmUnary Len e' /\ C.TyInt
-  case t of C.TyArray _ -> pure core
+  let core = C.TmUnary Len e' /\ S.TyInt
+  case t of S.TyArray _ -> pure core
             _ -> throwTypeError $ "Len is not defined for" <+> show t
 infer (S.TmUnary Sqrt e) = do
   e' /\ t <- infer e
-  let core = C.TmUnary Sqrt e' /\ C.TyDouble
-  case t of C.TyDouble -> pure core
+  let core = C.TmUnary Sqrt e' /\ S.TyDouble
+  case t of S.TyDouble -> pure core
             _ -> throwTypeError $ "Sqrt is not defined for" <+> show t
 infer (S.TmBinary (Arith op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  let core ty = C.TmBinary (Arith op) (C.TmAnno e1' ty) (C.TmAnno e2' ty) /\ ty
-  if t1 <: C.TyInt && t2 <: C.TyInt then pure $ core C.TyInt
-  else if t1 <: C.TyDouble && t2 <: C.TyDouble then pure $ core C.TyDouble
-  else throwTypeError $
-    "ArithOp is not defined between" <+> show t1 <+> "and" <+> show t2
+  let core ty sty = C.TmBinary (Arith op) (C.TmAnno e1' ty) (C.TmAnno e2' ty) /\ sty
+  s1 <- sub t1 S.TyInt
+  s2 <- sub t2 S.TyInt
+  if s1 && s2 then pure $ core C.TyInt S.TyInt
+  else do
+    s1' <- sub t1 S.TyDouble
+    s2' <- sub t2 S.TyDouble
+    if s1' && s2' then pure $ core C.TyDouble S.TyDouble
+    else throwTypeError $
+      "ArithOp is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary (Comp op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   let core ty = C.TmBinary (Comp op) (C.TmAnno e1' ty)
-                                     (C.TmAnno e2' ty) /\ C.TyBool
-  if t1 <: C.TyInt && t2 <: C.TyInt then pure $ core C.TyInt
-  else if t1 <: C.TyDouble && t2 <: C.TyDouble then pure $ core C.TyDouble
-  else if t1 <: C.TyString && t2 <: C.TyString then pure $ core C.TyString
-  else if t1 <: C.TyBool && t2 <: C.TyBool then pure $ core C.TyBool
-  else case t1, t2, isEqlOrNeq op of
-    C.TyRef _, C.TyRef _, true -> pure $ C.TmBinary (Comp op) e1' e2' /\ C.TyBool
-    _, _, _ -> throwTypeError $
-      "CompOp is not defined between" <+> show t1 <+> "and" <+> show t2
+                                     (C.TmAnno e2' ty) /\ S.TyBool
+  p1 <- (&&) <$> sub t1 S.TyInt <*> sub t2 S.TyInt
+  if p1 then pure $ core C.TyInt
+  else do
+    p2 <- (&&) <$> sub t1 S.TyDouble <*> sub t2 S.TyDouble
+    if p2 then pure $ core C.TyDouble
+    else do
+      p3 <- (&&) <$> sub t1 S.TyString <*> sub t2 S.TyString
+      if p3 then pure $ core C.TyString
+      else do
+        p4 <- (&&) <$> sub t1 S.TyBool <*> sub t2 S.TyBool
+        if p4 then pure $ core C.TyBool
+        else case t1, t2, isEqlOrNeq op of
+          S.TyRef _, S.TyRef _, true -> pure $ C.TmBinary (Comp op) e1' e2' /\ S.TyBool
+          _, _, _ -> throwTypeError $
+            "CompOp is not defined between" <+> show t1 <+> "and" <+> show t2
   where isEqlOrNeq :: CompOp -> Boolean
         isEqlOrNeq Eql = true
         isEqlOrNeq Neq = true
@@ -93,57 +104,85 @@ infer (S.TmBinary (Logic op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   let core = C.TmBinary (Logic op) (C.TmAnno e1' C.TyBool)
-                                   (C.TmAnno e2' C.TyBool) /\ C.TyBool
-  if t1 <: C.TyBool && t2 <: C.TyBool then pure core
+                                   (C.TmAnno e2' C.TyBool) /\ S.TyBool
+  p <- (&&) <$> sub t1 S.TyBool <*> sub t2 S.TyBool
+  if p then pure core
   else throwTypeError $
     "LogicOp is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary Append e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  if t1 <: C.TyString && t2 <: C.TyString then
+  p1 <- (&&) <$> sub t1 S.TyString <*> sub t2 S.TyString
+  if p1 then
     pure $ C.TmBinary Append (C.TmAnno e1' C.TyString)
-                             (C.TmAnno e2' C.TyString) /\ C.TyString
+                             (C.TmAnno e2' C.TyString) /\ S.TyString
   else case t1, t2 of
-    C.TyArray t1', C.TyArray t2' ->
-      let core el er ty = C.TmBinary Append el er /\ ty in
-      if t1' === t2' then pure $ core e1' e2' t1
-      else if t2' <: t1' then pure $ core e1' (C.TmAnno e2' t1) t1
-      else if t1' <: t2' then pure $ core (C.TmAnno e1' t2) e2' t2
-      else throwTypeError $
-        "Append expected two arrays of equivalent types or subtypes," <+>
-        "but got" <+> show t1' <+> "and" <+> show t2'
+    S.TyArray t1', S.TyArray t2' -> do
+      let core el er sty = C.TmBinary Append el er /\ sty
+      p2 <- aeq t1' t2'
+      if p2 then pure $ core e1' e2' t1
+      else do
+        s1 <- sub t2' t1'
+        tr1 <- transform t1
+        if s1 then pure $ core e1' (C.TmAnno e2' tr1) t1
+        else do
+          s2 <- sub t1' t2'
+          tr2 <- transform t2
+          if s2 then pure $ core (C.TmAnno e1' tr2) e2' t2
+          else throwTypeError $
+            "Append expected two arrays of equivalent types or subtypes," <+>
+            "but got" <+> show t1' <+> "and" <+> show t2'
     _, _ -> throwTypeError $
       "Append is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary Index e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  case t1 of C.TyArray t1' | t2 <: C.TyInt ->
-               pure $ C.TmBinary Index e1' (C.TmAnno e2' C.TyInt) /\ t1'
-             _ -> throwTypeError $ "Index is not defined between" <+>
-                                   show t1 <+> "and" <+> show t2
+  let te t1 t2 = throwTypeError $ "Index is not defined between" <+> show t1 <+> "and" <+> show t2
+  case t1 of 
+    S.TyArray t1' -> do
+      p <- sub t2 S.TyInt 
+      if p then pure $ C.TmBinary Index e1' (C.TmAnno e2' C.TyInt) /\ t1'
+      else te t1 t2
+    _ -> te t1 t2
 infer (S.TmIf e1 e2 e3) = do
   e1' /\ t1 <- infer e1
-  if t1 <: C.TyBool then do
+  s1 <- sub t1 S.TyBool
+  if s1 then do
     e2' /\ t2 <- infer e2
     e3' /\ t3 <- infer e3
-    let core et ef ty = C.TmIf (C.TmAnno e1' C.TyBool) et ef /\ ty
-    if t2 === t3 then pure $ core e2' e3' t2
-    else if t3 <: t2 then pure $ core e2' (C.TmAnno e3' t2) t2
-    else if t2 <: t3 then pure $ core (C.TmAnno e2' t3) e3' t3
-    else throwTypeError $
-      "if-branches expected two equivalent types or subtypes, but got" <+>
-      show t2 <+> "and" <+> show t3
+    let core et ef sty = C.TmIf (C.TmAnno e1' C.TyBool) et ef /\ sty
+    e1 <- aeq t2 t3
+    if e1 then pure $ core e2' e3' t2
+    else do
+      s2 <- sub t3 t2 
+      tr2 <- transform t2
+      if s2 then pure $ core e2' (C.TmAnno e3' tr2) t2
+      else do
+        s3 <- sub t2 t3
+        tr3 <- transform t3
+        if s3 then pure $ core (C.TmAnno e2' tr3) e3' t3
+        else throwTypeError $
+          "if-branches expected two equivalent types or subtypes, but got" <+>
+          show t2 <+> "and" <+> show t3
   else throwTypeError $ "if-condition expected Bool, but got" <+> show t1
 infer (S.TmVar x) = (C.TmVar x /\ _) <$> lookupTmBind x
 infer (S.TmApp e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  case t1 of C.TyArrow targ tret _ | t2 === targ -> pure $ C.TmApp e1' e2' false /\ tret
-                                   | labels@(_:_) <- collectOpt targ, t2 `andOpt` labels <: targ ->
-                                       let merge acc l = C.TmMerge acc (C.TmRcd l C.TyUnit C.TmUnit)
-                                           e2'' = foldl merge e2' labels in
-                                       pure $ C.TmApp e1' e2'' false /\ tret
-             _ -> (C.TmApp e1' e2' true /\ _) <$> distApp t1 (Left t2)
+  case t1 of 
+    S.TyArrow targ tret -> do
+      p1 <- aeq t2 targ
+      if p1 then pure $ C.TmApp e1' e2' false /\ tret
+      else do
+        labels <- collectOpt <$> transform targ
+        p2 <- (\t2' targ' -> t2' `andOpt` labels <: targ') <$> transform t2 <*> transform targ
+        if length labels > 0 && p2 then
+          let merge acc l = C.TmMerge acc (C.TmRcd l C.TyUnit C.TmUnit) 
+              e2'' = foldl merge e2' labels 
+          in pure $ C.TmApp e1' e2'' false /\ tret
+        else throwTypeError "TODO distApp for S.Ty"
+    _ -> throwTypeError "TODO distApp for S.Ty"
+        -- (C.TmApp e1' e2' true /\ _) <$> distApp t1 (Left t2) -- TODO distApp for S.Ty
   where collectOpt :: C.Ty -> List Label  -- TODO: collect optional labels in a safer way
         collectOpt (C.TyAnd t1 t2) = collectOpt t1 <> collectOpt t2
         collectOpt (C.TyRcd l (C.TyOr _ C.TyUnit)) = singleton l
@@ -151,37 +190,48 @@ infer (S.TmApp e1 e2) = do
         andOpt = foldl (\acc l -> C.TyAnd acc (C.TyRcd l C.TyUnit))
 infer (S.TmAbs (S.TmParam x (Just targ) : Nil) e) = do
   targ' <- transform targ
-  e' /\ tret <- addTmBind x targ' $ infer e
-  pure $ C.TmAbs x e' targ' tret false false /\ C.TyArrow targ' tret false
+  e' /\ tret <- addTmBind x targ $ infer e
+  tret' <- transform tret
+  pure $ C.TmAbs x e' targ' tret' false false /\ S.TyArrow targ tret
 infer (S.TmAbs (S.TmParam x Nothing : Nil) _) = throwTypeError $
   "lambda parameter" <+> show x <+> "should be annotated with a type"
 infer (S.TmAbs (S.WildCard _ : Nil) _) = throwTypeError $
   "record wildcards should only occur in traits with interfaces implemented"
 infer (S.TmFix x e t) = do
   t' <- transform t
-  e' /\ t'' <- addTmBind x t' $ infer e
-  if t'' <: t' then pure $ C.TmFix x e' t'' /\ t'' else throwTypeError $
+  e' /\ t'' <- addTmBind x t $ infer e
+  p <- sub t'' t
+  if p then pure $ C.TmFix x e' t' /\ t'' else throwTypeError $
     "fix body expected a subtype of the annotated type, but got " <+> show t''
 infer (S.TmAnno e ta) = do
   e' /\ t <- infer e
   ta' <- transform ta
-  if t <: ta' then pure $ C.TmAnno e' ta' /\ ta' else throwTypeError $
+  p <- sub t ta
+  if p then pure $ C.TmAnno e' ta' /\ ta else throwTypeError $
     "annotated" <+> show ta <+> "is not a supertype of inferred" <+> show t
 infer (S.TmMerge S.Neutral e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   case t1, t2 of
-    C.TyTop, _ -> pure $ e2' /\ t2
-    _, C.TyTop -> pure $ e1' /\ t1
-    C.TyArrow ti1 to1 true, C.TyArrow ti2 to2 true -> do
-      disjoint to1 to2
-      let ti = case ti1, ti2 of C.TyTop, _ -> ti2
-                                _, C.TyTop -> ti1
-                                _, _ -> C.TyAnd ti1 ti2
-      pure $ trait "$self" (C.TmMerge (appToSelf e1') (appToSelf e2')) ti (C.TyAnd to1 to2)
+    S.TyTop, _ -> pure $ e2' /\ t2
+    _, S.TyTop -> pure $ e1' /\ t1
+    S.TyTrait ti1 to1, S.TyTrait ti2 to2 -> do
+      to1' <- transform to1
+      to2' <- transform to2
+      disjoint to1' to2'
+      let ti = case ti1, ti2 of Nothing, Just i2 -> Just i2
+                                Just i1, Nothing -> Just i1
+                                Just i1, Just i2 -> Just $ S.TyAnd i1 i2
+                                Nothing, Nothing -> Nothing
+      trait "$self" (C.TmMerge (appToSelf e1') (appToSelf e2')) ti (S.TyAnd to1 to2)
     _, _ -> do
-      disjoint t1 t2
-      pure $ C.TmMerge e1' e2' /\ C.TyAnd t1 t2
+      t1' <- transform t1
+      t2' <- transform t2
+      disjoint t1' t2'
+      let res = case mkRcd (S.TyAnd t1 t2) of 
+                  Nil /\ st -> fromMaybe S.TyTop st
+                  sr /\ st -> S.TyAnd (S.TyRcd sr) (fromMaybe S.TyTop st)
+      pure $ C.TmMerge e1' e2' /\ res
   where appToSelf e = C.TmApp e (C.TmVar "$self") true
 infer (S.TmMerge S.Leftist e1 e2) =
   infer $ S.TmMerge S.Neutral e1 (S.TmDiff e2 e1)
@@ -191,81 +241,108 @@ infer (S.TmMerge S.Rightist e1 e2) =
 infer (S.TmSwitch e alias cases) = do
   tte <- for cases \(ti /\ ei) -> do
     ti' <- transform ti
-    ei' /\ to <- maybe identity (\x -> addTmBind x ti') alias $ infer ei
+    ei' /\ to <- maybe identity (\x -> addTmBind x ti) alias $ infer ei
     pure $ to /\ ti' /\ ei'
-  case maximal (fst <$> tte) of
+  m <- maximal (fst <$> tte)
+  case m of
     Just to -> do
       let cases' = snd <$> tte
           union = foldl1 C.TyOr (fst <$> cases')
       e' /\ t <- infer e
-      if t <: union then
+      t' <- transform t
+      to' <- transform to
+      if t' <: union then
         let switch = C.TmSwitch e' (fromMaybe "$alias" alias) cases' in
-        pure $ C.TmAnno switch to /\ to
+        pure $ C.TmAnno switch to' /\ to
       else throwTypeError $ "switch expression expected a subtype of" <+> show union
                          <> ", but got" <+> show t
     Nothing -> throwTypeError $ "switch cases have different types"
-  where maximal :: List C.Ty -> Maybe C.Ty
-        maximal Nil = Just C.TyBot
+  where maximal :: List S.Ty -> Typing (Maybe S.Ty)
+        maximal Nil = pure $ Just S.TyBot
         maximal (t : ts) = do
-          t' <- maximal ts
-          if t <: t' then Just t'
-          else if t' <: t then Just t
-          else Nothing
-infer (S.TmRcd Nil) = pure $ C.TmTop /\ C.TyTop
+          mt <- maximal ts
+          case mt of
+            Just t' -> do
+              p1 <- sub t t'
+              if p1 then pure $ Just t'
+              else do
+                p2 <- sub t'  t 
+                if p2 then  pure $ Just t
+                else pure Nothing
+            Nothing -> pure Nothing
+infer (S.TmRcd Nil) = pure $ C.TmTop /\ S.TyRcd Nil
 infer (S.TmRcd (S.RcdField _ l Nil (Left e) : Nil)) = do
   e' /\ t <- infer e
-  pure $ C.TmRcd l t e' /\ C.TyRcd l t
+  t' <- transform t
+  pure $ C.TmRcd l t' e' /\ S.TyRcd (S.RcdTy l t false : Nil)
 infer (S.TmPrj e l) = do
   e' /\ t <- infer e
-  let r /\ tr = case t of C.TyRec _ _ -> C.TmUnfold t e' /\ C.unfold t
-                          _ -> e' /\ t
-  case selectLabel tr l of
-    Just t' -> pure $ C.TmPrj r l /\ t'
+  t' <- transform t
+  let r = case t' of C.TyRec _ _ -> C.TmUnfold t' e' -- /\ C.unfold t'
+                     _ -> e' -- /\ t'
+  case selectLabel' t l of
+    Just t'' -> pure $ C.TmPrj r l /\ t''
     _ -> throwTypeError $ "label" <+> show l <+> "is absent in" <+> show t
+{- -- TODO distApp for S.Type
 infer (S.TmTApp e ta) = do
   e' /\ tf <- infer e
   ta' <- transform ta
   t <- distApp tf (Right ta')
   pure $ C.TmTApp e' ta' /\ t 
+-}
 infer (S.TmTAbs ((a /\ Just td) : Nil) e) = do
   td' <- transform td
-  e' /\ t <- addTyBind a td' $ infer e
-  pure $ C.TmTAbs a td' e' t false /\ C.TyForall a td' t
+  e' /\ t <- addTyBind a td $ infer e
+  t' <- transform t
+  pure $ C.TmTAbs a td' e' t' false /\ S.TyForall ((a /\ Just td) : Nil) t
 infer (S.TmLet x Nil Nil e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- addTmBind x t1 $ infer e2
-  pure $ letIn x e1' t1 e2' t2 /\ t2
+  t1' <- transform t1
+  t2' <- transform t2
+  pure $ letIn x e1' t1' e2' t2' /\ t2
 infer (S.TmLetrec x Nil Nil t e1 e2) = do
   e1' /\ t1 <- inferRec x e1 t
   e2' /\ t2 <- addTmBind x t1 $ infer e2
-  pure $ letIn x (C.TmFix x e1' t1) t1 e2' t2 /\ t2
+  t1' <- transform t1
+  t2' <- transform t2
+  pure $ letIn x (C.TmFix x e1' t1') t1' e2' t2' /\ t2
 -- TODO: find a more efficient algorithm
 infer (S.TmOpen e1 e2) = do
   e1' /\ t1 <- infer e1
-  let r /\ tr = case t1 of C.TyRec _ _ -> C.TmUnfold t1 e1' /\ C.unfold t1
-                           _ -> e1' /\ t1
-      b = foldr (\l s -> (l /\ unsafeFromJust (selectLabel tr l)) : s)
+  t1' <- transform t1
+  let r /\ tr = case t1' of C.TyRec _ _ -> C.TmUnfold t1' e1' /\ C.unfold t1'
+                            _ -> e1' /\ t1'
+      b = foldr (\l s -> (l /\ unsafeFromJust (selectLabel' t1 l)) : s)
                 Nil (collectLabels tr)
   e2' /\ t2 <- foldr (uncurry addTmBind) (infer e2) b
+  t2' <- transform t2
+  b' <- traverse (\(n /\ t) -> (\z -> n /\ z) <$> transform t) b
   -- `open` is the only construct that elaborates to a lazy definition
-  let open (l /\ t) e = letIn l (C.TmPrj (C.TmVar opened) l) t e t2
-  pure $ letIn opened r tr (foldr open e2' b) t2 /\ t2
+  let open (l /\ t) e = letIn l (C.TmPrj (C.TmVar opened) l) t e t2'
+  pure $ letIn opened r tr (foldr open e2' b') t2' /\ t2
   where opened = "$open"
 infer (S.TmUpdate rcd fields) = do
   rcd' /\ t <- infer rcd
   fields' <- for fields \(l /\ e) -> do
     e' /\ t' <- infer e
-    pure $ C.TmRcd l t' e'
-  let t' = foldr rcdTy C.TyTop fields'
-  if t <: t' then do
-    d <- tyDiff t t'
+    pure $ l /\ (e' /\ t')
+  let t' = S.TyRcd (map (\(l /\ (e' /\ t')) -> S.RcdTy l t' false) fields')
+  cfs <- for fields' \(l /\ (e' /\ t')) -> do
+    ct' <- transform t'
+    pure $ C.TmRcd l ct' e'
+  let ct' = foldr rcdTy C.TyTop cfs
+  ct <- transform t
+  if ct <: ct' then do
+    d <- tyDiff t t' >>= transform
     let merge = if isTopLike d then identity else C.TmMerge (C.TmAnno rcd' d)
-        updating = foldr1 C.TmMerge fields'
+        updating = foldr1 C.TmMerge cfs
     pure $ merge updating /\ t
   else throwTypeError $ "cannot safely update the record" <+> show rcd
   where rcdTy :: C.Tm -> C.Ty -> C.Ty
         rcdTy (C.TmRcd l t _) s = C.TyAnd (C.TyRcd l t) s
         rcdTy _ s = s
+{- TODO: modify the following code similarly
 infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
   t' <- transform t
   sig'' /\ sig' <- transform' sig
@@ -658,14 +735,29 @@ disjointTyBind _ _ _ _ _ = pure unit
 letIn :: Name -> C.Tm -> C.Ty -> C.Tm -> C.Ty -> C.Tm
 letIn x e1 t1 e2 t2 = C.TmApp (C.TmAbs x e2 t1 t2 false false) e1 false
 
-trait :: Name -> C.Tm -> C.Ty -> C.Ty -> C.Tm /\ C.Ty
-trait x e targ tret = C.TmAbs x e targ tret false isTrait /\ C.TyArrow targ tret true
-  where isTrait = not $ isTopLike targ  -- skip traits whose self-type is top-like
+trait :: Name -> C.Tm -> Maybe S.Ty -> S.Ty -> Typing (C.Tm /\ S.Ty)
+trait x e targ tret = do
+  let t = case targ of Just t -> t
+                       Nothing -> S.TyTop
+  targ' <- transform t
+  tret' <- transform tret
+  pure $ C.TmAbs x e targ' tret' false (not $ isTopLike targ') /\ S.TyTrait targ tret
+  -- skip traits whose self-type is top-like
 
 collectLabels :: C.Ty -> Set.Set Label
 collectLabels (C.TyAnd t1 t2) = Set.union (collectLabels t1) (collectLabels t2)
 collectLabels (C.TyRcd l _) = Set.singleton l
 collectLabels _ = Set.empty
+
+selectLabel' :: S.Ty -> Label -> Maybe S.Ty
+selectLabel' (S.TyAnd t1 t2) l =
+  case selectLabel' t1 l, selectLabel' t2 l of
+    Just t1', Just t2' -> Just (S.TyAnd t1' t2')
+    Just t1', Nothing  -> Just t1'
+    Nothing,  Just t2' -> Just t2'
+    Nothing,  Nothing  -> Nothing
+selectLabel' (S.TyRcd rs) l = lookup l (map (\(S.RcdTy l' t _) -> l' /\ t) rs)
+selectLabel' _ _ = Nothing
 
 selectLabel :: C.Ty -> Label -> Maybe C.Ty
 selectLabel (C.TyAnd t1 t2) l =
@@ -676,3 +768,12 @@ selectLabel (C.TyAnd t1 t2) l =
     Nothing,  Nothing  -> Nothing
 selectLabel (C.TyRcd l' t) l | l == l' = Just t
 selectLabel _ _ = Nothing
+
+-- reconstruct multi field records
+mkRcd :: S.Ty -> S.RcdTyList /\ Maybe S.Ty
+mkRcd (S.TyRcd rs) = rs /\ Nothing
+mkRcd (S.TyAnd l r) = 
+  let lr /\ lt = mkRcd l
+      rr /\ rt = mkRcd r
+  in (lr <> rr) /\ (S.TyAnd <$> lt <*> rt)
+mkRcd t = Nil /\ Just t
